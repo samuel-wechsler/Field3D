@@ -2,9 +2,23 @@
 import warnings
 import matplotlib.pyplot as plt
 import numpy as np
+from numpy import sin, cos
+from matplotlib.widgets import Slider
+from matplotlib.animation import FuncAnimation
 
 
 def vector(i, j, k):
+    """
+    Create a 3D vector.
+
+    Parameters:
+    i (float): The x-coordinate of the vector.
+    j (float): The y-coordinate of the vector.
+    k (float): The z-coordinate of the vector.
+
+    Returns:
+    numpy.ndarray: A numpy array representing the 3D vector.
+    """
     return np.array([i, j, k], dtype=float)
 
 
@@ -110,6 +124,27 @@ def sparse_domain(domain, density):
     return sparse_domain
 
 
+def sparse_coordinates(x, y, z, density):
+    """
+    Thins out a given set of coordinates.
+
+    - x, y, z: numpy arrays representing coordinates
+    - density: factor by which to reduce density of numpy arrays
+    """
+    density = max(int(density), 1)
+
+    # Create a mask based on density
+    mask = np.zeros_like(x, dtype=bool)
+    mask[::density] = True
+
+    # Apply the mask to each axis
+    sparse_x = x[mask]
+    sparse_y = y[mask]
+    sparse_z = z[mask]
+
+    return sparse_x, sparse_y, sparse_z
+
+
 def find_singularities(field, domain):
     """
     Detect singularities in a 3D field function.
@@ -150,18 +185,40 @@ def find_singularities(field, domain):
 
 class PlotUtils:
     def __init__(self) -> None:
-        pass
+        self.quiver_params = {
+            'normalize': True,
+        }
 
-    def plot(self):
+    @staticmethod
+    def set_quiver_params(self, **kwargs):
+        """
+        Set parameters for the quiver plot.
+
+        Parameters:
+        - kwargs: Keyword arguments to update the quiver parameters.
+
+        Returns:
+        - None
+        """
+        self.quiver_params.update(kwargs)
+
+    def plot(self, domain_range=None):
         fig = plt.figure()
 
         # Create a 3D plot
         self.ax = fig.add_subplot(111, projection="3d")
 
+        # set axes limits to domain range, if exists
+        if domain_range is not None:
+            self.ax.set_xlim([-domain_range, domain_range])
+            self.ax.set_ylim([-domain_range, domain_range])
+            self.ax.set_zlim([-domain_range, domain_range])
+
         # Make x, y, z-axis pane transparent
         self.ax.w_xaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
         self.ax.w_yaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
         self.ax.w_zaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
+
         # Remove grid
         self.ax.grid(True)
 
@@ -189,11 +246,32 @@ class Plot(PlotUtils):
 
         self.ax = self.plot()
 
-    def visualize(self):
+    def visualize(self, streamlines=False, tangents=False, density=1, color="black", tcolor="blue"):
+        """
+        Visualizes the elements in the plot.
+
+        Parameters:
+        - streamlines (bool): Whether to plot streamlines. Default is False.
+        - tangents (bool): Whether to plot tangent vectors. Default is False.
+        - density (float): The density of the tangent vectors. Default is 1.
+
+        Returns:
+        - None
+        """
         for element in self.elements:
             element.visualize(ax=self.ax,
                               domain_range=self.domain_range,
                               n=self.n)
+
+            # check if streamlines should be plotted.
+            if streamlines and isinstance(element, Field):
+                element.visualize_streamlines(ax=self.ax)
+
+            # check if whether to plot tangent vectors
+            elif tangents and isinstance(element, Curve):
+                element.visualize_tangents(density=density,
+                                           ax=self.ax,
+                                           color=tcolor)
 
 
 class Curve(PlotUtils):
@@ -217,15 +295,274 @@ class Curve(PlotUtils):
         self.t = t
         self.ax = None
 
+    def get_coordinates(self, density=1):
+        """
+        returns set of points (x, y, z) contained on curve
+        """
+        return sparse_coordinates(self.x, self.y, self.z, density)
+
+    def get_length(self, a=0, b=-1):
+        """
+        gets length of curve in between indices a and b.
+        """
+        dx = np.diff(self.x[a:b])
+        dy = np.diff(self.y[a:b])
+        dz = np.diff(self.z[a:b])
+
+        length = np.sum(np.sqrt(dx**2 + dy**2 + dz**2))
+
+        return length
+
+    def get_point_at_length(self, length):
+        """
+        returns point that is closest to a given length
+        """
+        assert length <= self.get_length()
+
+        lengths = np.cumsum(np.sqrt(np.diff(self.x)**2 +
+                            np.diff(self.y)**2 + np.diff(self.z)**2))
+        idx = np.searchsorted(lengths, length)
+
+        t = (length - lengths[idx-1]) / (lengths[idx] - lengths[idx-1])
+        x = self.x[idx-1] + t * (self.x[idx] - self.x[idx-1])
+        y = self.y[idx-1] + t * (self.y[idx] - self.y[idx-1])
+        z = self.z[idx-1] + t * (self.z[idx] - self.z[idx-1])
+
+        return vector(x, y, z)
+
+    def get_evenly_spaced_points(self, n):
+        """
+        Calculate n evenly spaced points along the curve
+        """
+        total_length = self.get_length()
+        lengths = np.linspace(0, total_length, n+1)
+
+        return [self.get_point_at_length(length) for length in lengths]
+
+    def get_vector_segments(self, n):
+        """
+        Divides the curve into n segments and returns the vector segments.
+        """
+        evenly_spaced_points = self.get_evenly_spaced_points(n)
+        segments = []
+
+        for i in range(n):
+            start_point = evenly_spaced_points[i]
+            end_point = evenly_spaced_points[i+1]
+            segment = end_point - start_point
+            segments.append(segment)
+
+        return segments
+
     def visualize(self, ax=None, domain_range=None, n=None, color="red"):
         """
         method that visualizes curve
 
         TODO: implement restriction of plotting to domain_range...
         """
-        ax = ax or self.ax or self.plot()
+        ax = ax or self.ax or self.plot(domain_range=domain_range)
 
         ax.plot(self.x, self.y, self.z, color=color, label="Curve")
+
+    def visualize_tangents(self, density=1, ax=None, domain_range=None, color="black", length=0.3):
+        """
+        Visualizes the tangent vectors of the curve.
+        """
+        ax = ax or self.ax or self.plot(domain_range=domain_range)
+
+        # compute tangent vectors
+        tangent_vectors = np.array([np.gradient(self.x, self.t),
+                                    np.gradient(self.y, self.t),
+                                    np.gradient(self.z, self.t)])
+        dx, dy, dz = tangent_vectors[0], tangent_vectors[1], tangent_vectors[2]
+
+        # sparse out
+        x, y, z = sparse_coordinates(self.x, self.y, self.z, density)
+        dx, dy, dz = sparse_coordinates(dx, dy, dz, density)
+
+        # visualize tangent vectors
+        ax.quiver(x, y, z, dx, dy, dz, label="Tangent vectors",
+                  color=color,
+                  length=length, **self.quiver_params,
+                  zorder=1)
+
+    # def visualize_projections(self, field, density, ax=None, color="blue", length=0.3):
+    #     """
+    #     This method projects vectors of the field onto the normal tangent components of
+    #     the curve.
+    #     """
+    #     ax = ax or self.ax or self.plot()
+
+    #     # Compute tangent vectors of the curve
+    #     tangent_vectors = np.array([np.gradient(self.x, self.t),
+    #                                 np.gradient(self.y, self.t),
+    #                                 np.gradient(self.z, self.t)]).T
+
+    #     # Compute unit tangent vectors
+    #     unit_tangent_vectors = tangent_vectors / \
+    #         np.linalg.norm(tangent_vectors, axis=0)
+
+    #     # compute the field vectors
+    #     field_vectors = field(self.x, self.y, self.z).T
+
+    #     # compute projections of field onto unit tangent vectors to curve
+    #     dots = np.sum(field_vectors * unit_tangent_vectors, axis=1)
+    #     projections = (dots[:, np.newaxis] * tangent_vectors).T
+
+    #     # compute the normal vector
+    #     normals = field_vectors.T - projections
+
+    #     # Visualize projections
+    #     x, y, z = sparse_coordinates(self.x, self.y, self.z, density)
+    #     px, py, pz = sparse_coordinates(projections[0],
+    #                                     projections[1],
+    #                                     projections[2],
+    #                                     density=density)
+
+    #     ax.quiver(x, y, z, px, py, pz, label="Projections",
+    #               color=color, length=length, normalize=True,
+    #               zorder=2)
+
+        # # Visualize normals
+        # x, y, z = x + px, y + py, z + pz
+        # nx, ny, nz = sparse_coordinates(normals[0], normals[1], normals[2],
+        #                                 density=density)
+        # ax.quiver(x, y, z, nx, ny, nz, color="red",
+        #           length=length, normalize=True, zorder=2)
+
+    def visualize_curve_segments(self, n, ax=None):
+        """
+        Dissect the curve into n linear segments.
+        """
+        ax = ax or self.ax or self.plot()
+        vector_segments = self.get_vector_segments(n)
+
+        # Get the evenly spaced points on the curve
+        points = self.get_evenly_spaced_points(n)
+
+        # Visualize the curve segments
+        for i in range(n):
+            x0, y0, z0 = points[i]
+            x1, y1, z1 = vector_segments[i]
+
+            # Plot the segment vector with smaller arrow heads
+            ax.quiver(x0, y0, z0, x1, y1, z1,
+                      color="black", zorder=2, arrow_length_ratio=0.02)
+
+        return points, vector_segments
+
+    def visualize_projections(self, field, segment_vectors, segment_points, color="black", ax=None):
+        """
+        Visualizes the projections of field vectors onto segment vectors.
+
+        Parameters:
+        - field: The field object representing the vector field.
+        - segment_vectors: The vectors representing the segments.
+        - segment_points: The points representing the segments.
+        - color: The color of the projections (default: "black").
+        - ax: The matplotlib axes object to plot on (default: None).
+
+        Returns:
+        - The sum of the projections (i.e., flux)
+        """
+        ax = ax or self.ax or self.plot()
+
+        # Ditch the last point to match number of segment vectors
+        segment_points = segment_points[:-1]
+
+        # transpose points
+        x_p, y_p, z_p = np.array(segment_points).T
+
+        # Compute field vectors at specified points
+        field_vectors = field.field(x_p, y_p, z_p).T
+
+        # Normalize segment vectors
+        unit_segment_vectors = segment_points / \
+            np.linalg.norm(segment_vectors, axis=0)
+
+        # Compute projections of field vectors onto segment vectors
+        dots = np.sum(field_vectors * unit_segment_vectors, axis=1)
+        projections = (dots[:, np.newaxis] * segment_vectors).T
+
+        # Visualize projections
+        px, py, pz = projections
+
+        ax.quiver(x_p, y_p, z_p, px, py, pz, label="Projections",
+                  color="blue",
+                  arrow_length_ratio=0.0,  # Remove arrow heads
+                  zorder=2)
+
+        # TODO: implement the below code in a nice way
+        # # Clearify projection (dotty vertical lines)
+        # x, y, z = x_p + px, y_p + py, z_p + pz
+        # n_x, n_y, n_z = field_vectors.T - projections
+
+        # ax.quiver(x, y, z, n_x, n_y, n_z,
+        #           color="blue", linestyle="--",
+        #           arrow_length_ratio=0.0)
+
+        # Plot field
+        field.visualize(domain=(x_p, y_p, z_p), ax=ax)
+
+        return np.sum(projections)
+
+    def line_integral_scene(self, field, ax=None):
+        """
+        This method starts an animation which displays the visualizations of k curve
+        segments.
+
+        Parameters:
+        - field: The field for which the line integral is calculated.
+        - ax: The matplotlib axes object on which the plot is displayed. If not provided,
+          a new plot will be created.
+
+        Returns:
+        None
+        """
+        ax = ax or self.ax or self.plot()
+
+        self.visualize()
+
+        # Set the initial number of segments
+        initial_segments = 10
+
+        # Create a slider to control the number of segments
+        ax_segments = plt.axes([0.25, 0.1, 0.65, 0.03])
+        slider_segments = Slider(
+            ax_segments, 'Segments', 10, 100, valinit=initial_segments, valstep=1
+        )
+
+        # Initialize the curve segments plot
+        self.visualize_curve_segments(initial_segments, ax)
+
+        def update(num_segments):
+            # Clear the plot
+            ax.clear()
+
+            self.visualize()
+
+            # Update the curve segments plot
+            points, vectors = self.visualize_curve_segments(
+                n=num_segments, ax=ax
+            )
+
+            # Update projection segments plot
+            flux = self.visualize_projections(
+                field, vectors, points
+            )
+
+            ax.set_title(f"flux = {flux}")
+
+        # Register the update function to be called when the slider value changes
+        slider_segments.on_changed(update)
+
+        # # Create the animation
+        # animation = FuncAnimation(
+        #     plt.gcf(), update, frames=range(10, 201, 2), interval=200, repeat=False
+        # )
+
+        # Show the plot
+        plt.show()
 
 
 class Surface(PlotUtils):
@@ -381,7 +718,7 @@ class Field(PlotUtils):
 
         return (min_max(x), min_max(y), min_max(z))
 
-    def visualize(self, ax=None, domain_range=2, n=5, fieldlines=True):
+    def visualize(self, domain=None, ax=None, length=0.3, color="black", domain_range=2, n=5, fieldlines=False):
         """
         A method that visualizes the vector field in R3.
 
@@ -390,13 +727,14 @@ class Field(PlotUtils):
         - num_points_per_dim (int): Number of points to sample along each dimension.
         """
         ax = ax or self.ax or self.plot()
-        x, y, z = self.domain or self.sample_points(domain_range, n)
+        x, y, z = domain or self.domain or self.sample_points(domain_range, n)
 
         values = self.field(x, y, z)
 
         # Vector field visualization
         ax.quiver(x, y, z, values[0], values[1], values[2],
-                  colors="black", label="Vectors", length=0.4, normalize=True)
+                  label="Vector field", length=length, color=color,
+                  **self.quiver_params)
 
         if fieldlines:
             self.visualize_streamlines(ax=ax, domain_range=domain_range, n=n)
@@ -408,11 +746,11 @@ class Field(PlotUtils):
         x, y, z = self.sample_points(domain_range=20.0, n=5)
         curl = self.curl(x, y, z)
 
-        self.ax.quiver(x, y, z, curl[0], curl[1], curl[2],
-                       colors="blue", label="Curl", length=2, normalize=True)
+        self.ax.quiver(x, y, z, curl[0], curl[1],
+                       curl[2], label="Curl", **self.quiver_params)
         self.ax.legend()
 
-    def streamlines(self, domain_range=2, n=5, delta=0.1, iter=10000, domain_lims=True):
+    def streamlines(self, domain=None, domain_range=2, n=5, delta=0.1, iter=10000, domain_lims=True):
         """
         This method computes streamlines.
         - iter (int): number of iterations, O(n^2)
@@ -421,7 +759,7 @@ class Field(PlotUtils):
         - domain_lims (bool): specifies whether streamlines can extend beyond vector field
                               domains
         """
-        seeds = self.domain or self.sample_points(domain_range, n)
+        seeds = domain or self.domain or self.sample_points(domain_range, n)
         x_lim, y_lim, z_lim = self.get_domain_lims(seeds, tolerance=0.5)
 
         # list of tuples (x, y, z) where x, y, z specify coordinates of a streamline
