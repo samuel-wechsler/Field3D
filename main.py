@@ -202,30 +202,32 @@ class PlotUtils:
         """
         self.quiver_params.update(kwargs)
 
-    def plot(self, domain_range=None):
+    def plot(self, domain_range=1):
         fig = plt.figure()
 
         # Create a 3D plot
         self.ax = fig.add_subplot(111, projection="3d")
 
         # set axes limits to domain range, if exists
-        if domain_range is not None:
-            self.ax.set_xlim([-domain_range, domain_range])
-            self.ax.set_ylim([-domain_range, domain_range])
-            self.ax.set_zlim([-domain_range, domain_range])
+        self.ax.set_xlim([-domain_range, domain_range])
+        self.ax.set_ylim([-domain_range, domain_range])
+        self.ax.set_zlim([-domain_range, domain_range])
+
+        # enforce equal aspect ratio
+        self.ax.set_box_aspect([1, 1, 1])
 
         # Make x, y, z-axis pane transparent
         self.ax.w_xaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
         self.ax.w_yaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
         self.ax.w_zaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
 
-        # Remove grid
-        self.ax.grid(True)
-
         # set labels
         self.ax.set_xlabel('x')
         self.ax.set_ylabel('y')
         self.ax.set_zlabel('z')
+
+        # Remove grid
+        self.ax.grid(False)
 
         return self.ax
 
@@ -244,7 +246,7 @@ class Plot(PlotUtils):
         self.domain_range = domain_range
         self.n = n
 
-        self.ax = self.plot()
+        self.ax = self.plot(domain_range=domain_range)
 
     def visualize(self, streamlines=False, tangents=False, density=1, color="black", tcolor="blue"):
         """
@@ -447,11 +449,11 @@ class Curve(PlotUtils):
 
             # Plot the segment vector with smaller arrow heads
             ax.quiver(x0, y0, z0, x1, y1, z1,
-                      color="black", zorder=2, arrow_length_ratio=0.02)
+                      color="black", zorder=2, arrow_length_ratio=0.01)
 
         return points, vector_segments
 
-    def visualize_projections(self, field, segment_vectors, segment_points, color="black", ax=None):
+    def visualize_projections(self, field, segment_vectors, segment_points, color="black", ax=None, alpha=1):
         """
         Visualizes the projections of field vectors onto segment vectors.
 
@@ -477,8 +479,9 @@ class Curve(PlotUtils):
         field_vectors = field.field(x_p, y_p, z_p).T
 
         # Normalize segment vectors
-        unit_segment_vectors = segment_points / \
-            np.linalg.norm(segment_vectors, axis=0)
+        unit_segment_vectors = segment_vectors / np.linalg.norm(
+            segment_vectors, axis=0
+        )
 
         # Compute projections of field vectors onto segment vectors
         dots = np.sum(field_vectors * unit_segment_vectors, axis=1)
@@ -489,7 +492,7 @@ class Curve(PlotUtils):
 
         ax.quiver(x_p, y_p, z_p, px, py, pz, label="Projections",
                   color="blue",
-                  arrow_length_ratio=0.0,  # Remove arrow heads
+                  arrow_length_ratio=0.1,  # Remove arrow heads
                   zorder=2)
 
         # TODO: implement the below code in a nice way
@@ -501,12 +504,15 @@ class Curve(PlotUtils):
         #           color="blue", linestyle="--",
         #           arrow_length_ratio=0.0)
 
-        # Plot field
-        field.visualize(domain=(x_p, y_p, z_p), ax=ax)
+        # # Plot field
+        # field.visualize(domain=(x_p, y_p, z_p), ax=ax)
+
+        field.visualize(domain_range=1, n=5, ax=ax,
+                        fieldlines=False, alpha=alpha)
 
         return np.sum(projections)
 
-    def line_integral_scene(self, field, ax=None):
+    def line_integral_scene(self, field, surface=None, ax=None, alpha=1):
         """
         This method starts an animation which displays the visualizations of k curve
         segments.
@@ -533,13 +539,12 @@ class Curve(PlotUtils):
         )
 
         # Initialize the curve segments plot
-        self.visualize_curve_segments(initial_segments, ax)
-
         def update(num_segments):
             # Clear the plot
             ax.clear()
 
             self.visualize()
+            surface.visualize(ax=ax)
 
             # Update the curve segments plot
             points, vectors = self.visualize_curve_segments(
@@ -548,10 +553,10 @@ class Curve(PlotUtils):
 
             # Update projection segments plot
             flux = self.visualize_projections(
-                field, vectors, points
+                field, vectors, points, alpha=alpha
             )
 
-            ax.set_title(f"flux = {flux}")
+        update(10)
 
         # Register the update function to be called when the slider value changes
         slider_segments.on_changed(update)
@@ -589,9 +594,9 @@ class Surface(PlotUtils):
             color="blue", alpha=0.5
         )
 
-        # ax.plot_wireframe(self.x, self.y, self.f(self.x, self.y),
-        #                   rcount=15, ccount=5, color="black"
-        #                   )
+        ax.plot_wireframe(self.x, self.y, self.f(self.x, self.y),
+                          rcount=15, ccount=5, color="black"
+                          )
 
 
 class ParamSurface(PlotUtils):
@@ -620,15 +625,6 @@ class Boundary:
     """
 
     def __init__(self, surface: Surface) -> None:
-        pass
-
-
-class Shadow:
-    """
-    Class to obtain the shadow of a surface / curve
-    """
-
-    def __init__(self) -> None:
         pass
 
 
@@ -718,7 +714,7 @@ class Field(PlotUtils):
 
         return (min_max(x), min_max(y), min_max(z))
 
-    def visualize(self, domain=None, ax=None, length=0.3, color="black", domain_range=2, n=5, fieldlines=False):
+    def visualize(self, domain=None, ax=None, length=0.3, color="black", alpha=1, domain_range=2, n=5, fieldlines=False):
         """
         A method that visualizes the vector field in R3.
 
@@ -727,14 +723,14 @@ class Field(PlotUtils):
         - num_points_per_dim (int): Number of points to sample along each dimension.
         """
         ax = ax or self.ax or self.plot()
-        x, y, z = domain or self.domain or self.sample_points(domain_range, n)
+        x, y, z = domain or self.sample_points(domain_range, n)
 
         values = self.field(x, y, z)
 
         # Vector field visualization
         ax.quiver(x, y, z, values[0], values[1], values[2],
                   label="Vector field", length=length, color=color,
-                  **self.quiver_params)
+                  **self.quiver_params, alpha=alpha)
 
         if fieldlines:
             self.visualize_streamlines(ax=ax, domain_range=domain_range, n=n)
@@ -747,7 +743,9 @@ class Field(PlotUtils):
         curl = self.curl(x, y, z)
 
         self.ax.quiver(x, y, z, curl[0], curl[1],
-                       curl[2], label="Curl", **self.quiver_params)
+                       curl[2], label="Curl",
+                       **self.quiver_params,
+                       arrow_length_ratio=0.02)
         self.ax.legend()
 
     def streamlines(self, domain=None, domain_range=2, n=5, delta=0.1, iter=10000, domain_lims=True):
@@ -806,7 +804,7 @@ class Field(PlotUtils):
     def visualize_streamlines(self, ax=None, domain_range=2, n=5, color="black", linestyle="--", linewidth=0.9):
         ax = ax or self.ax or self.plot()
 
-        streamlines = self.streamlines(domain_range, n)
+        streamlines = self.streamlines(domain_range=domain_range, n=n)
 
         for streamline in streamlines:
             ax.plot(*streamline,
